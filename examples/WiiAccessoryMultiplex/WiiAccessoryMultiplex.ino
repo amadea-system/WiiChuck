@@ -19,10 +19,10 @@ void setup() {
 	 DrawsomeTablet,
 	 Turntable
 	 */
-	if (nunchuck1.type == Unknown) {
+	if (nunchuck1.type == UnknownChuck) {
 		nunchuck1.type = NUNCHUCK;
 	}
-	if (nunchuck2.type == Unknown) {
+	if (nunchuck2.type == UnknownChuck) {
 		nunchuck2.type = NUNCHUCK;
 	}
 }
