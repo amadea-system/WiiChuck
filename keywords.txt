@@ -211,4 +211,4 @@ GuitarHeroController	LITERAL1
 GuitarHeroWorldTourDrums	LITERAL1
 DrumController	LITERAL1
 DrawsomeTablet	LITERAL1
-Unknown	LITERAL1
+UnknownChuck	LITERAL1

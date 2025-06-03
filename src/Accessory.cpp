@@ -64,7 +64,7 @@ ControllerType Accessory::identifyController() {
 						if (_dataarray[5] == 0x13)
 							return DrawsomeTablet; // Drawsome Tablet
 
-	return Unknown;
+	return UnknownChuck;
 }
 
 void Accessory::sendMultiSwitch(uint8_t iic, uint8_t sw) {

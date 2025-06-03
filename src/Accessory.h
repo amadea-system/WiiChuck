@@ -43,7 +43,7 @@
 #define dataArraySize 6
 
 typedef enum _controllertype {
-	Unknown,
+	UnknownChuck,
 	NUNCHUCK,
 	WIICLASSIC,
 	GuitarHeroController,

@@ -5,7 +5,7 @@ Accessory nunchuck1;
 void setup() {
 	Serial.begin(115200);
 	nunchuck1.begin();
-	if (nunchuck1.type == Unknown) {
+	if (nunchuck1.type == UnknownChuck) {
 		/** If the device isn't auto-detected, set the type explicatly
 		 * 	NUNCHUCK,
 		 WIICLASSIC,
