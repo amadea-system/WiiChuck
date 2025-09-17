@@ -2,16 +2,55 @@
 #include <Wire.h>
 
 Accessory::Accessory() {
-	type = NUNCHUCK;
+	// type = NUNCHUCK;
+	setControllerType(NUNCHUCK);
+	this->_i2cPort = &Wire;
+	I2CPortName = "Wire";
 }
+
+
 /**
- * Reads the device type from the controller
+ * Constructor which allows specifying the I2C port to use.
+ * `i2cPort` should be a pointer to a `TwoWire` instance (e.g. `&Wire`, `&Wire1`, etc).
+ * `portNumber` is optional, and is only used for setting the `I2CPortName` string (e.g. "Wire1").
+ *   This is mostly useful for debugging purposes.	
+ */
+Accessory::Accessory(TwoWire* i2cPort, int8_t portNumber) {
+	this->_i2cPort = i2cPort;
+	accessoryName = "Unknown Accessory";
+	I2CPortName = "Unknown I2C Port";
+	if (i2cPort == &Wire) {
+		I2CPortName = "Wire";
+	} else if (portNumber >= 0) {
+		I2CPortName = "Wire" + String(portNumber);
+	}
+	setControllerType(NUNCHUCK);
+}
+
+/**
+ * Returns the previously identified controller type.
+ * (Note: Does not re-identify the controller via I2C; use `identifyController()` for that.)
  */
 ControllerType Accessory::getControllerType() {
 	return type;
 }
 
+/**
+ * Set the controller type.
+ * The controller name string will also be updated accordingly.
+ */
+void Accessory::setControllerType(ControllerType t) {
+	type = t;
+	accessoryName = _convertControllerTypeToString(t);
+}
+
+
+/**
+ * Identifies the connected Wii Controller Type by reading its peripheral bytes.
+ */
 ControllerType Accessory::identifyController() {
+	//TODO: Should we prevent use if there is a communication error?
+
 	//Serial.println("Reading periph bytes");
 	_burstRead(0xfa);
 	//printInputs(Serial);
@@ -71,10 +110,10 @@ void Accessory::sendMultiSwitch(uint8_t iic, uint8_t sw) {
 	uint8_t err = 0;
 	int i = 0;
 	for (; i < 10; i++) {
-		Wire.beginTransmission(iic);
-		Wire.write(1 << sw);
-		Wire.endTransmission();
-		err = Wire.endTransmission();
+		this->_i2cPort->beginTransmission(iic);
+		this->_i2cPort->write(1 << sw);
+		this->_i2cPort->endTransmission();
+		err = this->_i2cPort->endTransmission();
 		if (err != 0) {
 //			Serial.println(
 //					"sendMultiSwitch Resetting because of " + String(err));
@@ -105,7 +144,7 @@ void Accessory::switchMultiplexer(uint8_t iic, uint8_t sw) {
 #if defined(TWCR)
 	if (TWCR == 0)
 #endif
-		Wire.begin();
+	this->_i2cPort->begin();
 	// Start I2C if it's not running
 	sendMultiSwitch(iic, sw);
 }
@@ -114,6 +153,11 @@ void Accessory::switchMultiplexer(uint8_t iic, uint8_t sw) {
  * public function to read data
  */
 boolean Accessory::readData() {
+
+	if(this->_commState == ERROR){
+		return false;
+	}
+
 	switchMultiplexer();
 
 	if (_burstRead()) {
@@ -122,17 +166,23 @@ boolean Accessory::readData() {
 	return false;
 }
 
+/**
+ * Returns the current data array.
+ */
 uint8_t* Accessory::getDataArray() {
 	return _dataarray;
 }
 
+/**
+ * This seems to initialize the Wii peripheral?
+ */
 void Accessory::initBytes() {
 	//Serial.println("Init Periph..");
 	_writeRegister(0xF0, 0x55);
 	_writeRegister(0xFB, 0x00);
 	delay(100);
 
-	type = identifyController();
+	setControllerType(identifyController());
 	delay(100);
 
 	if (_encrypted) {
@@ -254,14 +304,46 @@ bool Accessory::decodeBit(uint8_t byte, uint8_t bit, bool activeLow) {
 	return activeLow ? (!sw) : (sw);
 }
 
-void Accessory::begin() {
+/**
+ * Initialises the Accessory.
+ * The following sequence is performed:
+ *  - I2C Port is started (`_i2cPort->begin()`)
+ *  - Multiplexer is switched (if configured)
+ *  - Accessory is initialised via `initBytes()`
+ *  - Controller type is identified via `identifyController()`
+ *  - 2 burst reads are performed to prime the data
+ * 
+ * If clearCommunicationError is true, any existing communication error state will be cleared before attempting re-initialization.
+ *   Default: false.
+ */
+boolean Accessory::begin(boolean clearCommunicationError) {
+
+	if (clearCommunicationError) {
+		clearCommError();
+	}
+
+	// This is mainly for internal use. It prevents us from getting in an infinite loop where `_burstRead()` calls `begin()` which then calls `_burstRead()` again.
+	if (this->hasCommError() && this->_retryOnCommError == false) {
+		// If we are already in a comm error state, and retry on comm error is disabled, do nothing.
+		Serial.println("Unable to re-initialize " + accessoryName + "  due to previous communication error on I2C Port: " + I2CPortName);
+		return commsAreOK();
+	}
+
+	//? Alternatively, instead of using the `reInit` flag, we could make it so that begin can only be called if the 
+	//?   _commState is UNINITIALIZED or OK. If we are coming from an internal call from _burstRead, we should always be in an error state.
+	//?   hasCommError() == True when _commState == ERROR
+	
+	Serial.println("Starting " + accessoryName + " on " + I2CPortName);
+	this->_commState = UNINITIALIZED;
+
+
 #if defined(TWCR)
 	if (TWCR == 0)
 #endif
 #if defined(ARDUINO_ARCH_ESP32)
-		Wire.begin(SDA,SCL,10000);
+		this->_i2cPort->begin(SDA,SCL,10000);
 #else
-	Wire.begin();
+	this->_i2cPort->begin();
 
 #endif
 	// Start I2C if it's not running
@@ -269,6 +351,12 @@ void Accessory::begin() {
 	switchMultiplexer();
 
 	initBytes();
+	if(this->hasCommError()){
+		Serial.println("Initialization failed for " + accessoryName + " on " + I2CPortName + ". Bailing Early.");
+		return commsAreOK();
+	}
+
+	// If `initBytes()` was successful, Assume the rest of the calls will be successful too.
 	identifyController();
 	if (getControllerType() == DrawsomeTablet) {
 		initBytesDrawsome();
@@ -277,8 +365,14 @@ void Accessory::begin() {
 	_burstRead();
 	delay(100);
 	_burstRead();
+
+	return commsAreOK();
 }
 
+/**
+ * Private function to burst read data from the accessory via I2C.
+ * 
+ */
 boolean Accessory::_burstRead(uint8_t addr) {
 	//int readAmnt = dataArraySize;
 	uint8_t err = 0;
@@ -286,17 +380,19 @@ boolean Accessory::_burstRead(uint8_t addr) {
 	int b = 0;
 	//bool consecCheck = true;
 	uint8_t readBytes=0;
+
+	// Loop up to 5 times to get a valid read.
 	for (; b < 5; b++) {
-		Wire.beginTransmission(WII_I2C_ADDR);
-		Wire.write(addr);
-		err = Wire.endTransmission();
+		this->_i2cPort->beginTransmission(WII_I2C_ADDR);
+		this->_i2cPort->write(addr);
+		err = this->_i2cPort->endTransmission();
 		if (err == 0) {			// wait for data to be converted
 
 			delayMicroseconds(275);
-			int requested = Wire.requestFrom(WII_I2C_ADDR, dataArraySize);
+			int requested = this->_i2cPort->requestFrom(WII_I2C_ADDR, dataArraySize);
 			delayMicroseconds(100);
 			// read data
-			 readBytes = Wire.readBytes(_dataarrayTMP,requested);
+			readBytes = this->_i2cPort->readBytes(_dataarrayTMP,requested);
 			dataBad = true;
 			//consecCheck=true;
 			// If all bytes are 255, this is likely an error packet, reject
@@ -305,6 +401,7 @@ boolean Accessory::_burstRead(uint8_t addr) {
 					dataBad=false;
 				}
 			}
+
 			// check to see we read enough bytes and that they are valid
 			if(readBytes == dataArraySize && dataBad==false){
 				// decrypt bytes
@@ -319,61 +416,44 @@ boolean Accessory::_burstRead(uint8_t addr) {
 						//Serial.print(" , "+String( (uint8_t)_dataarray[i]));
 					}
 				}
-				// Check the read in data aganst the last read date,
-				// a valid burst read is 2 reads that produce the same data
+
+				// ~~ Check the read in data aganst the last read date, a valid burst read is 2 reads that produce the same data ~~
+				// Skip the afformentiond check against the last read data. Assume the data is good at this point.
 				dataBad=false;
-//				for (int x = 0; x< dataArraySize && dataBad==false; x++){
-//					if(_dataarray[x]!=_dataarrayReadConsec[x]){
-//						dataBad=true;
-////						if(b>2){
-////							Serial.print("\nBad Data Packet repeted: _burstRead Resetting " + String(b+1)+"\n\tExpected: ");
-////							for (int i = 0; i < dataArraySize; i++){
-////
-////								Serial.print(" "+String( (uint8_t)_dataarrayReadConsec[i]));
-////							}
-////							Serial.print("\n\tgot:      ");
-////							for (int i = 0; i < dataArraySize; i++){
-////
-////								Serial.print(" "+String( (uint8_t)_dataarray[i]));
-////							}
-////						}
-//						//consecCheck=false;
-//					}
-//				}
-				// copy current frame to compare to next frame
-				for (int i = 0; i < dataArraySize; i++){
-					_dataarrayReadConsec[i]=_dataarray[i];
-				}
-				// after 2 identical reads, process the data
-				if(!dataBad){
-					getValues();			//parse the data into readable data
-					return true; // fast return once the success case is reached
-				}else{
-					//delay(3);
-				}
+
+				// after successful read, process the data
+				getValues();			//parse the data into readable data
+				this->_commState = OK;
+				return true; // fast return once the success case is reached
 
 			}else{
-
-				dataBad=true;
+				// We reach here if the readBytes != dataArraySize
+				// OR if dataBad == True.
+				dataBad=true;  // For the case where readBytes != dataArraySize, Make sure the data is marked bad
 			}
 		}
+
 		if(dataBad || (err != 0) ){
+			this->_commState = ERROR;  // Mark comm error true if we reach here
 			if((err != 0)){
 				Serial.println(	"\nI2C error code _burstRead error: " + String(err)
-												+ " repeted: " + String(b+1));
+												+ ". repeat count: " + String(b+1));
 				if(err==5){
+					Serial.println("I2C error 5, re-initializing I2C bus `" + I2CPortName + "`");
 					begin();
 				}
 
 			}else if(readBytes != dataArraySize){
-				Serial.println("\nI2C Read length failure _burstRead Resetting " + String(readBytes)
-												+ " repeted: " + String(dataArraySize));
+				Serial.println("\nI2C Read length failure: " + String(readBytes) + " != " + String(dataArraySize) 
+												+ " _burstRead Resetting"
+												+ ". repeat count: " + String(b+1));
 			}else if(dataBad){
-
+				Serial.println("\n!!!!!! UNHANDLED _burstRead CONDITION !!!!! `dataBad` and no other applicable case."
+												+ String(". repeat count: ") + String(b+1));
 			}else
 				Serial.println(
 						"\nOther I2C error, packet all 255 _burstRead Resetting " + String(err)
-								+ " repeted: " + String(b+1));
+								+ ". repeat count: " + String(b+1));
 			reset();
 		}
 
@@ -390,17 +470,20 @@ void Accessory::_writeRegister(uint8_t reg, uint8_t value) {
 	uint8_t err = 0;
 	int i = 0;
 	for (; i < 10; i++) {
-		Wire.beginTransmission(WII_I2C_ADDR);
-		Wire.write(reg);
-		Wire.write(value);
-		err = Wire.endTransmission();
+		this->_i2cPort->beginTransmission(WII_I2C_ADDR);
+		this->_i2cPort->write(reg);
+		this->_i2cPort->write(value);
+		err = this->_i2cPort->endTransmission();
 		if (err != 0) {
 //			Serial.println(
 //					"_writeRegister Resetting because of " + String(err)
 //							+ " repeted: " + String(i));
+			this->_commState = ERROR;
 			reset();
-		} else
+		} else{
+			this->_commState = OK;
 			return;
+		}
 	}
 
 }
@@ -416,27 +499,36 @@ void Accessory::_burstWriteWithAddress(uint8_t addr, uint8_t* arr,
 	uint8_t err = 0;
 	int i = 0;
 	for (; i < 3; i++) {
-		Wire.beginTransmission(WII_I2C_ADDR);
-		Wire.write(addr);
+		this->_i2cPort->beginTransmission(WII_I2C_ADDR);
+		this->_i2cPort->write(addr);
 		for (int i = 0; i < size; i++)
-			Wire.write(arr[i]);
-		err = Wire.endTransmission();
+			this->_i2cPort->write(arr[i]);
+		err = this->_i2cPort->endTransmission();
 		if (err != 0) {
 //			Serial.println(
 //					"_burstWriteWithAddress Resetting because of " + String(err)
 //							+ " repeted: " + String(i));
+			this->_commState = ERROR;
 			reset();
-		} else
+		} else {
+			this->_commState = OK;
 			return;
+		}
 	}
 
 }
 
 void Accessory::reset() {
+	if (this->hasCommError() && this->_retryOnCommError == false) {
+		// If we are already in a comm error state, and retry on comm error is disabled, do nothing.
+		return;
+	}
+
+	Serial.println("Resetting " + accessoryName + " on " + I2CPortName);
 #if defined(ARDUINO_ARCH_ESP32)
-		Wire.begin(SDA,SCL,10000);
+		this->_i2cPort->begin(SDA,SCL,10000);
 #else
-	Wire.begin();
+	this->_i2cPort->begin();
 
 #endif
 }
@@ -522,3 +614,71 @@ uint8_t * Accessory::getValues() {
 	return values;
 }
 ;
+
+
+/**
+ * Convert the name of a controller type to a String.
+ */
+String Accessory::_convertControllerTypeToString(ControllerType type) {
+	switch (type) {
+	case UnknownChuck:
+		return "Unknown Chuck";
+	case NUNCHUCK:
+		return "Nunchuck";
+	case WIICLASSIC:
+		return "Wii Classic Controller";
+	case GuitarHeroController:
+		return "Guitar Hero Controller";
+	case GuitarHeroWorldTourDrums:
+		return "Guitar Hero World Tour Drums";
+	case DrumController:
+		return "Drum Controller";
+	case DrawsomeTablet:
+		return "Drawsome Tablet";
+	case Turntable:
+		return "Turntable";
+	default:
+		return "Unknown Controller";
+	}
+}
+
+/**
+ * Returns true if there has been a communication error with the accessory.
+ */
+boolean Accessory::hasCommError() {
+	return this->_commState == ERROR;
+}
+
+/**
+ * Returns true if communication with the accessory is OK.
+ *   AKA, initialized and no errors.
+ */
+boolean Accessory::commsAreOK() {
+	return this->_commState == OK;
+}
+
+/**
+ * Clears any existing communication error state.
+ * This will allow the accessory to attempt to re-initialize and read data again.
+ * Note: This does not re-initialize the accessory; you must call `begin()` again manually.
+ */
+void Accessory::clearCommError() {
+	this->_commState = UNINITIALIZED;
+}
+
+/**
+ * Sets whether to retry initialization and reading if there is a communication error.
+ * If set to false, once a communication error occurs, the accessory will not attempt
+ * to re-initialize or read data until `begin()` is called again manually.
+ * Default: true
+ */
+void Accessory::setRetryOnCommError(boolean retry) {
+	this->_retryOnCommError = retry;
+}
+
+/**
+ * Returns true if the accessory will retry initialization and reading on communication errors.
+ */
+boolean Accessory::getRetryOnCommError() {
+	return this->_retryOnCommError;
+}

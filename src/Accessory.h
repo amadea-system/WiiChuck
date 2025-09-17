@@ -2,6 +2,7 @@
 #define Accessory_h
 
 #include "Arduino.h"
+#include <Wire.h>
 
 //
 
@@ -53,6 +54,12 @@ typedef enum _controllertype {
 	Turntable
 } ControllerType;
 
+typedef enum {
+	UNINITIALIZED,
+	OK,
+	ERROR
+} CommsState;
+
 class Accessory: public Classic,
 		public DJTable,
 		public Nunchuck,
@@ -61,22 +68,23 @@ class Accessory: public Classic,
 		public Guitar {
 public:
 	Accessory();
+	Accessory(TwoWire* i2cPort, int8_t portNumber = -1);
 	void reset();
-	ControllerType type;
+	// ControllerType type;
 
 	uint8_t* getDataArray();
 	void setDataArray(uint8_t data[6]);
 
 	void printInputs(Stream& stream = Serial);
 
-	void begin();
+	boolean begin(boolean clearCommunicationError = false);
 	boolean readData();
 
 	void enableEncryption(bool enc);
 
 	void addMultiplexer(uint8_t iic, uint8_t sw);
 	void switchMultiplexer();
-	static void switchMultiplexer(uint8_t iic, uint8_t sw);
+	void switchMultiplexer(uint8_t iic, uint8_t sw);
 
 	int decodeInt(uint8_t msbbyte, uint8_t msbstart, uint8_t msbend,
 			uint8_t csbbyte, uint8_t csbstart, uint8_t csbend, uint8_t lsbbyte,
@@ -216,6 +224,20 @@ public:
 
 	void initBytesDrawsome();
 
+	/* ----- My Additions ----- */
+	boolean hasCommError();
+	boolean commsAreOK();
+	void clearCommError();
+
+	void setRetryOnCommError(boolean retry);
+	boolean getRetryOnCommError();
+
+	// String for storing the Name of the Accessory and it's I2C Port
+	String accessoryName = "Unknown Accessory";
+	String I2CPortName = "Unknown I2C Port";
+
+	void setControllerType(ControllerType t);
+
 protected:
 	bool _encrypted;
 	// allow sub classes to view the data
@@ -236,10 +258,27 @@ protected:
 	void _writeRegister(uint8_t reg, uint8_t value);
 	void _burstWriteWithAddress(uint8_t addr, uint8_t* arr, uint8_t size);
 
+	/* ----- My Additions ----- */
+
+	// I2C port to use
+	TwoWire* _i2cPort;
+
+	// True if there has been in issue with communication with an accessory. (Not w/ multiplexer)
+	CommsState _commState = UNINITIALIZED;
+
+	// If true, we will reset on a communication error. 
+	// When enabled, `hasCommError()` will always return false.
+	boolean _retryOnCommError = false;
+
+	String _convertControllerTypeToString(ControllerType type);
+
+	ControllerType type; // Moved from public to protected
+
 private:
-	static void sendMultiSwitch(uint8_t iic, uint8_t sw);
+	void sendMultiSwitch(uint8_t iic, uint8_t sw);
 
 	uint8_t mapCount;
+
 };
 
 #endif
