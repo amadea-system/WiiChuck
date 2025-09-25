@@ -15,7 +15,7 @@ Accessory::Accessory() {
  * `portNumber` is optional, and is only used for setting the `I2CPortName` string (e.g. "Wire1").
  *   This is mostly useful for debugging purposes.	
  */
-Accessory::Accessory(TwoWire* i2cPort, int8_t portNumber) {
+Accessory::Accessory(TwoWire* i2cPort, int8_t portNumber, int sda_pin, int scl_pin) {
 	this->_i2cPort = i2cPort;
 	accessoryName = "Unknown Accessory";
 	I2CPortName = "Unknown I2C Port";
@@ -25,6 +25,9 @@ Accessory::Accessory(TwoWire* i2cPort, int8_t portNumber) {
 		I2CPortName = "Wire" + String(portNumber);
 	}
 	setControllerType(NUNCHUCK);
+#   if defined(ARDUINO_ARCH_ESP32)
+		_setI2CPins(sda_pin, scl_pin);
+#   endif
 }
 
 /**
@@ -526,7 +529,7 @@ void Accessory::reset() {
 
 	Serial.println("Resetting " + accessoryName + " on " + I2CPortName);
 #if defined(ARDUINO_ARCH_ESP32)
-		this->_i2cPort->begin(SDA,SCL,10000);
+		this->_i2cPort->begin(_sdaPin, _sclPin, 10000);
 #else
 	this->_i2cPort->begin();
 
@@ -681,4 +684,19 @@ void Accessory::setRetryOnCommError(boolean retry) {
  */
 boolean Accessory::getRetryOnCommError() {
 	return this->_retryOnCommError;
+}
+
+
+/**
+ * Sets the pins to be used when initializing the I2C Port.
+ * If the current MCU does not support specifying the pins, this function does nothing.
+ */
+void Accessory::_setI2CPins(int8_t sda, int8_t scl) {
+	#if defined(ARDUINO_ARCH_ESP32)
+		_sdaPin = sda;
+		_sclPin = scl;
+	#else
+		// Not supported on this platform
+		Serial.println("Warning: _setI2CPins() is not supported on this platform.");
+	#endif
 }

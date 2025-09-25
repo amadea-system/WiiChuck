@@ -68,7 +68,7 @@ class Accessory: public Classic,
 		public Guitar {
 public:
 	Accessory();
-	Accessory(TwoWire* i2cPort, int8_t portNumber = -1);
+	Accessory(TwoWire* i2cPort, int8_t portNumber = -1, int sda_pin=SDA, int scl_pin=SCL);
 	void reset();
 	// ControllerType type;
 
@@ -262,6 +262,9 @@ protected:
 
 	// I2C port to use
 	TwoWire* _i2cPort;
+	// I2C Pins
+	int _sdaPin = SDA;
+	int _sclPin = SCL;
 
 	// True if there has been in issue with communication with an accessory. (Not w/ multiplexer)
 	CommsState _commState = UNINITIALIZED;
@@ -273,6 +276,9 @@ protected:
 	String _convertControllerTypeToString(ControllerType type);
 
 	ControllerType type; // Moved from public to protected
+
+	// Helper to set I2C Pins.
+	void _setI2CPins(int8_t sda, int8_t scl);
 
 private:
 	void sendMultiSwitch(uint8_t iic, uint8_t sw);
